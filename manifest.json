@@ -1,0 +1,51 @@
+{
+  "name": "Nuvio Torrents",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "yts_720p",
+      "name": "YTS 720p",
+      "description": "720p torrent magnet links",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/yts_720p.js",
+      "enabled": true,
+      "hasSettings": true,
+      "logo": "https://em-content.zobj.net/source/apple/391/eagle_1f985.png",
+      "contentLanguage": ["en", "hi"],
+      "formats": ["mkv", "mp4"],
+      "supportsExternalPlayer": true 
+    },
+    {
+      "id": "yts_1080p",
+      "name": "YTS 1080p",
+      "description": "1080p torrent magnet links",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/yts_1080p.js",
+      "enabled": true,
+      "hasSettings": true,
+      "logo": "https://em-content.zobj.net/source/apple/391/eagle_1f985.png",
+      "contentLanguage": ["en", "hi"],
+      "formats": ["mkv", "mp4"],
+      "supportsExternalPlayer": true 
+    },
+    {
+      "id": "yts_2160p",
+      "name": "YTS 2160p",
+      "description": "2160p torrent magnet links",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/yts_2160p.js",
+      "enabled": true,
+      "hasSettings": true,
+      "logo": "https://em-content.zobj.net/source/apple/391/eagle_1f985.png",
+      "contentLanguage": ["en", "hi"],
+      "formats": ["mkv", "mp4"],
+      "supportsExternalPlayer": true 
+    }
+  ]
+}
