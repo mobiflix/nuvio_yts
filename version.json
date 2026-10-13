@@ -1,0 +1,5 @@
+{
+  "version": "v101",
+  "released": "2026-09-30",
+  "notes": "Performance optimizations v2: Home cache (10 min), notification refresh (1 hour), API cache (30 min), smart refresh, provider batch optimization, cache clear sa logout."
+}
