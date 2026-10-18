@@ -1,15 +1,15 @@
 {
-  "name": "Nuvio Torrents",
+  "name": "MobiFlix",
   "version": "1.0.0",
   "scrapers": [
     {
-      "id": "yts",
-      "name": "YTS",
-      "description": "1080p torrent magnet links",
+      "id": "Vidy",
+      "name": "Vidy",
+      "description": "1080p Resolution",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "supportedTypes": ["movie", "tv"],
-      "filename": "providers/yts.js",
+      "filename": "providers/vidy.js",
       "enabled": true,
       "hasSettings": true,
       "logo": "https://em-content.zobj.net/source/apple/391/eagle_1f985.png",
@@ -18,13 +18,13 @@
       "supportsExternalPlayer": true 
     },
     {
-      "id": "eztv",
-      "name": "EZTV+1337x",
-      "description": "1080p torrent magnet links",
+      "id": "YTS",
+      "name": "YTS",
+      "description": "1080p Resolution",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "supportedTypes": ["movie", "tv"],
-      "filename": "providers/eztv.js",
+      "filename": "providers/yts.js",
       "enabled": true,
       "hasSettings": true,
       "logo": "https://em-content.zobj.net/source/apple/391/eagle_1f985.png",
