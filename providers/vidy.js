@@ -3,7 +3,7 @@ const API_BASE = "https://api.wecollege.net";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
 // Pinaikling timeouts para hindi mag-hang
-const SEED_TIMEOUT = 4000;  // 4 seconds
+const SEED_TIMEOUT = 4000;    // 4 seconds
 const SOURCES_TIMEOUT = 6000; // 6 seconds
 
 async function fetchText(url, timeoutMs) {
@@ -228,11 +228,11 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     if (!numericTmdbId) return [];
     if (normalizedType === "tv" && (season == null || episode == null)) return [];
 
-    const regions = ["miami", "boise"];
-    const allStreams = [];
-    const seen = new Set();
+    // Ang order dito ang magdidikta kung sino ang mauuna
+    const regions = ["miami", "boise"]; 
+    const payloadMap = {};
 
-    // Gumawa ng array ng promises para sa LAHAT ng regions para sabay-sabay silang mag-fetch
+    // Sabay nating i-fetch ang dalawa (parallel) para mabilis
     const fetchPromises = regions.map(async (region) => {
       try {
         const payload = await fetchPayloadFromRegion(
@@ -242,19 +242,23 @@ async function getStreams(tmdbId, mediaType, season, episode) {
           Number(season),
           Number(episode)
         );
-        return { region, payload };
+        payloadMap[region] = payload;
       } catch (error) {
-        return null; // I-ignore ang failed region
+        payloadMap[region] = null; // I-ignore kung mag-fail
       }
     });
 
-    // Hintayin ang lahat ng regions na matapos (o mag-fail)
-    const results = await Promise.allSettled(fetchPromises);
+    // Hintayin parehong matapos o mag-timeout (max 10s)
+    await Promise.allSettled(fetchPromises);
 
-    // I-proseso lahat ng successful results
-    for (const result of results) {
-      if (result.status === "fulfilled" && result.value && result.value.payload) {
-        const { region, payload } = result.value;
+    const allStreams = [];
+    const seen = new Set();
+
+    // Dahil tapos na ang fetch sa itaas, susundin natin ang order ng "regions"
+    // laging MIAMI ang mauuna, tapos BOISE.
+    for (const region of regions) {
+      const payload = payloadMap[region];
+      if (payload) {
         for (const stream of buildStreams(payload, region)) {
           if (seen.has(stream.url)) continue;
           seen.add(stream.url);
