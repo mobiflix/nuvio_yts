@@ -2,6 +2,10 @@ const BASE_URL = "https://www.vidy.st/";
 const API_BASE = "https://api.wecollege.net";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
+// Pinaikling timeouts para hindi mag-hang
+const SEED_TIMEOUT = 4000;  // 4 seconds
+const SOURCES_TIMEOUT = 6000; // 6 seconds
+
 async function fetchText(url, timeoutMs) {
   const response = await withTimeout(fetch(url, { headers: { "User-Agent": USER_AGENT, "Accept": "*/*" } }), timeoutMs);
   if (response.status !== 200) throw new Error("http_" + response.status);
@@ -172,21 +176,17 @@ function collectWantedSources(rawSources) {
   return wantedSources;
 }
 
-// Bagong format na hawig sa YTS
 function buildStreams(payload, region) {
   const subtitles = normalizeSubtitles(payload.subtitles);
   const sources = collectWantedSources(payload.sources);
 
   return sources.map(({ url, height }, index) => {
-    // Ginagaya ang YTS format para magmukhang legit
-    const providerName = region.toUpperCase(); // "MIAMI" or "BOISE"
-    const fakeSeeders = 100 + ((index * 13) % 800); // Random seeders
-    const fakeSize = (1.2 + (index * 0.4)).toFixed(2); // Random size (GB)
+    const providerName = region.toUpperCase();
+    const fakeSeeders = 100 + ((index * 13) % 800);
+    const fakeSize = (1.2 + (index * 0.4)).toFixed(2);
     
-    // Format: MIAMI | 1080P | 🌱 132
     const streamName = `${providerName} | ${height}P | 🌱 ${fakeSeeders}`;
     
-    // Title na may detalyadong info gaya ng sa screenshot
     const streamTitle = `🎬 Spider-Man: Brand New Day ${height}p\n🔥 ${height}p | 💾 ${fakeSize} GB | 🔗 ${providerName}`;
 
     return {
@@ -201,7 +201,7 @@ function buildStreams(payload, region) {
 }
 
 async function fetchSeed(tmdbId) {
-  const body = await fetchText(API_BASE + "/seed?mediaId=" + tmdbId, 8000);
+  const body = await fetchText(API_BASE + "/seed?mediaId=" + tmdbId, SEED_TIMEOUT);
   const { seed } = JSON.parse(body);
   if (!seed) throw new Error("empty_seed");
   return seed;
@@ -216,24 +216,9 @@ function buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode) {
 async function fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode) {
   const seed = await fetchSeed(tmdbId);
   const url = buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode);
-  const encryptedBody = await fetchText(url, 12000);
+  const encryptedBody = await fetchText(url, SOURCES_TIMEOUT);
   const payload = JSON.parse(decryptPayload(encryptedBody, seed, tmdbId));
   return payload.sources && payload.sources.length > 0 ? payload : null;
-}
-
-async function fetchAllPayloads(mediaType, tmdbId, season, episode) {
-  const regions = ["miami", "boise"];
-  const payloads = [];
-
-  for (const region of regions) {
-    try {
-      const payload = await fetchPayloadFromRegion(
-        region, mediaType, tmdbId, season, episode
-      );
-      if (payload) payloads.push({ region, payload });
-    } catch (error) { }
-  }
-  return payloads;
 }
 
 async function getStreams(tmdbId, mediaType, season, episode) {
@@ -243,22 +228,41 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     if (!numericTmdbId) return [];
     if (normalizedType === "tv" && (season == null || episode == null)) return [];
 
-    const payloads = await fetchAllPayloads(
-      normalizedType,
-      numericTmdbId,
-      Number(season),
-      Number(episode)
-    );
-
+    const regions = ["miami", "boise"];
     const allStreams = [];
     const seen = new Set();
-    for (const { region, payload } of payloads) {
-      for (const stream of buildStreams(payload, region)) {
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
-        allStreams.push(stream);
+
+    // Gumawa ng array ng promises para sa LAHAT ng regions para sabay-sabay silang mag-fetch
+    const fetchPromises = regions.map(async (region) => {
+      try {
+        const payload = await fetchPayloadFromRegion(
+          region,
+          normalizedType,
+          numericTmdbId,
+          Number(season),
+          Number(episode)
+        );
+        return { region, payload };
+      } catch (error) {
+        return null; // I-ignore ang failed region
+      }
+    });
+
+    // Hintayin ang lahat ng regions na matapos (o mag-fail)
+    const results = await Promise.allSettled(fetchPromises);
+
+    // I-proseso lahat ng successful results
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value && result.value.payload) {
+        const { region, payload } = result.value;
+        for (const stream of buildStreams(payload, region)) {
+          if (seen.has(stream.url)) continue;
+          seen.add(stream.url);
+          allStreams.push(stream);
+        }
       }
     }
+
     return allStreams;
   } catch (error) {
     return [];
