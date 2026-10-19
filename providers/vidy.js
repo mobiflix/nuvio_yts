@@ -2,11 +2,20 @@ const BASE_URL = "https://www.vidy.st/";
 const API_BASE = "https://api.wecollege.net";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
-const SAFETY_FETCH_TIMEOUT = 30000;
-const MIAMI_GRACE_MS = 5000;
+const SEED_TIMEOUT = 4000;
+const SOURCES_TIMEOUT = 6000;
+
+async function fetchText(url, timeoutMs) {
+  const response = await withTimeout(fetch(url, { headers: { "User-Agent": USER_AGENT, "Accept": "*/*" } }), timeoutMs);
+  if (response.status !== 200) throw new Error("http_" + response.status);
+  return withTimeout(response.text(), timeoutMs);
+}
+
+function isHttpUrl(value) {
+  return typeof value === "string" && /^https?:/.test(value);
+}
 
 function withTimeout(promise, timeoutMs) {
-  if (timeoutMs == null) return promise;
   return new Promise((resolve, reject) => {
     const timerId = setTimeout(() => reject(new Error("timeout")), timeoutMs);
     promise.then(
@@ -14,19 +23,6 @@ function withTimeout(promise, timeoutMs) {
       (error) => { clearTimeout(timerId); reject(error); }
     );
   });
-}
-
-async function fetchText(url, timeoutMs = SAFETY_FETCH_TIMEOUT) {
-  const response = await withTimeout(
-    fetch(url, { headers: { "User-Agent": USER_AGENT, "Accept": "*/*" } }),
-    timeoutMs
-  );
-  if (response.status !== 200) throw new Error("http_" + response.status);
-  return withTimeout(response.text(), timeoutMs);
-}
-
-function isHttpUrl(value) {
-  return typeof value === "string" && /^https?:/.test(value);
 }
 
 function decodeBase64Url(encoded) {
@@ -146,18 +142,23 @@ function collectWantedSources(rawSources) {
   return wantedSources;
 }
 
+// DITO ANG MALAKING PAGBABAGO: Gumamit tayo ng invisible characters (Zero-Width Space at Non-Joiner)
+// Para pwersahang mauuna si MIAMI kahit anong sorting ang gawin ng App.
 function buildStreams(payload, region) {
   const subtitles = normalizeSubtitles(payload.subtitles);
   const sources = collectWantedSources(payload.sources);
 
-  const sortTag = region === "miami" ? "\u200B" : "\u200C";
+  // Invisible Sort Tags
+  const sortTag = region === "miami" ? "\u200B" : "\u200C"; // \u200B (Miami) mauuna, \u200C (Boise) pangalawa
 
   return sources.map(({ url, height }, index) => {
     const providerName = region.toUpperCase();
     const fakeSeeders = 100 + ((index * 13) % 800);
     const fakeSize = (1.2 + (index * 0.4)).toFixed(2);
-
+    
+    // Nilagyan natin ng sortTag sa unahan ng name
     const streamName = `${sortTag}${providerName} | ${height}P | 🌱 ${fakeSeeders}`;
+    
     const streamTitle = `🎬 Spider-Man: Brand New Day ${height}p\n🔥 ${height}p | 💾 ${fakeSize} GB | 🔗 ${providerName}`;
 
     return {
@@ -172,7 +173,7 @@ function buildStreams(payload, region) {
 }
 
 async function fetchSeed(tmdbId) {
-  const body = await fetchText(API_BASE + "/seed?mediaId=" + tmdbId);
+  const body = await fetchText(API_BASE + "/seed?mediaId=" + tmdbId, SEED_TIMEOUT);
   const { seed } = JSON.parse(body);
   if (!seed) throw new Error("empty_seed");
   return seed;
@@ -187,145 +188,50 @@ function buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode) {
 async function fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode) {
   const seed = await fetchSeed(tmdbId);
   const url = buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode);
-  const encryptedBody = await fetchText(url);
+  const encryptedBody = await fetchText(url, SOURCES_TIMEOUT);
   const payload = JSON.parse(decryptPayload(encryptedBody, seed, tmdbId));
   return payload.sources && payload.sources.length > 0 ? payload : null;
 }
 
-async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
-  const normalizedType = mediaType === "tv" ? "tv" : "movie";
-  const numericTmdbId = Number(tmdbId);
-
-  if (!numericTmdbId) return;
-  if (normalizedType === "tv" && (season == null || episode == null)) return;
-
-  const regions = ["miami", "boise"];
-  const seen = new Set();
-  const t0 = Date.now();
-
-  console.log(`[GEN ${Date.now() - t0}ms] START — regions: ${regions.join(", ")}`);
-
-  const pending = new Map();
-  regions.forEach((region, i) => {
-    pending.set(i, (async () => {
-      const regionStart = Date.now();
-      try {
-        const payload = await fetchPayloadFromRegion(
-          region, normalizedType, numericTmdbId, Number(season), Number(episode)
-        );
-        const elapsed = Date.now() - t0;
-        if (payload) {
-          console.log(`[GEN ${elapsed}ms] FETCH OK — ${region.toUpperCase()} (${Date.now() - regionStart}ms fetch)`);
-          return { region, streams: buildStreams(payload, region) };
-        }
-        console.log(`[GEN ${elapsed}ms] FETCH EMPTY — ${region.toUpperCase()}`);
-        return null;
-      } catch (error) {
-        const elapsed = Date.now() - t0;
-        console.log(`[GEN ${elapsed}ms] FETCH FAIL — ${region.toUpperCase()}: ${error.message}`);
-        return null;
-      }
-    })());
-  });
-
-  const miamiPromise = pending.get(0);
-  const boisePromise = pending.get(1);
-
-  let miamiSettled = false;
-  let miamiResult = null;
-
-  try {
-    const raceResult = await Promise.race([
-      miamiPromise.then((r) => ({ type: "miami", value: r })),
-      new Promise((resolve) =>
-        setTimeout(() => resolve({ type: "grace_expired" }), MIAMI_GRACE_MS)
-      )
-    ]);
-
-    if (raceResult.type === "miami") {
-      miamiSettled = true;
-      miamiResult = raceResult.value;
-      console.log(`[GEN ${Date.now() - t0}ms] MIAMI settled within grace`);
-    } else {
-      console.log(`[GEN ${Date.now() - t0}ms] MIAMI grace expired (${MIAMI_GRACE_MS}ms) — moving on`);
-    }
-  } catch {
-    miamiSettled = true;
-    miamiResult = null;
-  }
-
-  if (miamiSettled && miamiResult) {
-    const fresh = miamiResult.streams.filter((s) => !seen.has(s.url));
-    fresh.forEach((s) => seen.add(s.url));
-    if (fresh.length > 0) {
-      console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD MIAMI — ${fresh.length} streams`);
-      yield fresh;
-    }
-  }
-
-  if (!miamiSettled) {
-    const firstSettled = await Promise.race([
-      miamiPromise.then((r) => ({ type: "miami", value: r })),
-      boisePromise.then((r) => ({ type: "boise", value: r }))
-    ]);
-
-    if (firstSettled.type === "miami") {
-      miamiSettled = true;
-      const freshM = (firstSettled.value?.streams || []).filter((s) => !seen.has(s.url));
-      freshM.forEach((s) => seen.add(s.url));
-      if (freshM.length > 0) {
-        console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD MIAMI (post-grace) — ${freshM.length} streams`);
-        yield freshM;
-      }
-
-      const boiseResult = await boisePromise;
-      if (boiseResult) {
-        const freshB = boiseResult.streams.filter((s) => !seen.has(s.url));
-        freshB.forEach((s) => seen.add(s.url));
-        if (freshB.length > 0) {
-          console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD BOISE — ${freshB.length} streams`);
-          yield freshB;
-        }
-      }
-    } else {
-      const freshB = (firstSettled.value?.streams || []).filter((s) => !seen.has(s.url));
-      freshB.forEach((s) => seen.add(s.url));
-      if (freshB.length > 0) {
-        console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD BOISE (first) — ${freshB.length} streams`);
-        yield freshB;
-      }
-
-      const miamiFinal = await miamiPromise;
-      if (miamiFinal) {
-        const freshM = miamiFinal.streams.filter((s) => !seen.has(s.url));
-        freshM.forEach((s) => seen.add(s.url));
-        if (freshM.length > 0) {
-          console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD MIAMI (late) — ${freshM.length} streams`);
-          yield freshM;
-        }
-      }
-    }
-  } else {
-    const boiseResult = await boisePromise;
-    if (boiseResult) {
-      const freshB = boiseResult.streams.filter((s) => !seen.has(s.url));
-      freshB.forEach((s) => seen.add(s.url));
-      if (freshB.length > 0) {
-        console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD BOISE — ${freshB.length} streams`);
-        yield freshB;
-      }
-    }
-  }
-
-  console.log(`[GEN ${Date.now() - t0}ms] DONE`);
-}
-
 async function getStreams(tmdbId, mediaType, season, episode) {
-  const all = [];
-  for await (const batch of getStreamsProgressive(tmdbId, mediaType, season, episode)) {
-    all.push(...batch);
+  try {
+    const normalizedType = mediaType === "tv" ? "tv" : "movie";
+    const numericTmdbId = Number(tmdbId);
+    if (!numericTmdbId) return [];
+    if (normalizedType === "tv" && (season == null || episode == null)) return [];
+
+    const regions = ["miami", "boise"]; 
+    const payloadMap = {};
+
+    const fetchPromises = regions.map(async (region) => {
+      try {
+        const payload = await fetchPayloadFromRegion(region, normalizedType, numericTmdbId, Number(season), Number(episode));
+        payloadMap[region] = payload;
+      } catch (error) {
+        payloadMap[region] = null;
+      }
+    });
+
+    await Promise.allSettled(fetchPromises);
+
+    const allStreams = [];
+    const seen = new Set();
+
+    for (const region of regions) {
+      const payload = payloadMap[region];
+      if (payload) {
+        for (const stream of buildStreams(payload, region)) {
+          if (seen.has(stream.url)) continue;
+          seen.add(stream.url);
+          allStreams.push(stream);
+        }
+      }
+    }
+
+    return allStreams;
+  } catch (error) {
+    return [];
   }
-  return all;
 }
 
-module.exports = { getStreams, getStreamsProgressive };
+module.exports = { getStreams };
