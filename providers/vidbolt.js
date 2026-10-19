@@ -6,14 +6,13 @@ const P_HEADERS = {
 };
 const HEADERS = { ...P_HEADERS, "Accept": "application/json" };
 
-// Orion at Callisto lang
+// Dalawang server lang
 const SERVERS = ["orion", "callisto"];
 const SERVER_LABELS = {
     orion: "Orion",
     callisto: "Callisto",
 };
 
-// Purong 1080P text para sa format
 const Q_1080 = { label: "1080P" };
 
 async function fetchResolverPayload(queryString) {
@@ -32,35 +31,46 @@ function parseQuality(rawQuality) {
     return null;
 }
 
-function parseSources(payload) {
+// Binago natin ito para kunin lang ang unang matinong 1080p source per server
+function parseSingleSource(payload) {
     const stream = payload && payload.stream;
     const rawSources = stream && Array.isArray(stream.sources) ? stream.sources : [];
-    const seenUrls = new Set();
-    const candidates = [];
-
+    
     for (const source of rawSources) {
-        if (!source || typeof source.url !== "string" || !source.url || seenUrls.has(source.url)) continue;
+        if (!source || typeof source.url !== "string" || !source.url) continue;
         const quality = parseQuality(source.quality || source.name);
         if (!quality) continue;
-        seenUrls.add(source.url);
-        candidates.push({ url: source.url, quality });
+        
+        // Ibalik agad ang unang nahanap para isa lang per server
+        return { 
+            url: source.url, 
+            quality, 
+            serverName: stream && typeof stream.server === "string" ? stream.server : "" 
+        };
     }
-
-    return {
-        candidates,
-        serverName: stream && typeof stream.server === "string" ? stream.server : "",
-    };
+    return null;
 }
 
 async function locateSources(queryString) {
-    const fallbacks = await Promise.all(
+    // Sabay nating tatanungin si Orion at Callisto
+    const results = await Promise.all(
         SERVERS.map(async (server) => {
-            const parsed = parseSources(await fetchResolverPayload(`${queryString}&prefer=${server}`));
-            return { candidates: parsed.candidates, serverName: parsed.serverName || server };
+            const payload = await fetchResolverPayload(`${queryString}&prefer=${server}`);
+            const parsed = parseSingleSource(payload);
+            if (parsed) {
+                return {
+                    url: parsed.url,
+                    quality: parsed.quality,
+                    // Kung walang ibinalik na pangalan ang API, gamitin ang default (orion/callisto)
+                    serverName: parsed.serverName || server
+                };
+            }
+            return null;
         })
     );
 
-    return fallbacks.find((result) => result.candidates.length) || { candidates: [], serverName: "" };
+    // Ibabalik lahat ng servers na may nahanap (Orion at/o Callisto)
+    return results.filter(Boolean);
 }
 
 async function getStreams(tmdbId, mediaType, season, episode) {
@@ -74,21 +84,21 @@ async function getStreams(tmdbId, mediaType, season, episode) {
         ? `type=tv&id=${tmdbId}&season=${season}&episode=${episode}`
         : `type=movie&id=${tmdbId}`;
 
-    const { candidates, serverName } = await locateSources(queryString);
-    
-    // Siguraduhing tama ang capitalization
-    const rawServer = serverName || (candidates.length > 0 ? "Orion" : "");
-    const displayServer = SERVER_LABELS[rawServer.toLowerCase()] || rawServer;
+    const availableSources = await locateSources(queryString);
 
-    return candidates.slice(0, 3).map(({ url, quality }) => {
-        // Format gaya ng screenshot: Orion | 1080P | 🌱 100
-        const label = `${displayServer} | ${quality.label} | 🌱 100`;
+    // I-mapa natin sila sa tamang format
+    return availableSources.map((source) => {
+        // Siguraduhing tama ang capitalization (Orion / Callisto)
+        const displayServer = SERVER_LABELS[source.serverName.toLowerCase()] || source.serverName;
+        
+        // Format: Orion | 1080P | 🌱 100
+        const label = `${displayServer} | ${source.quality.label} | 🌱 100`;
         
         return {
             name: label,
             title: label,
-            url,
-            quality: quality.label, 
+            url: source.url,
+            quality: source.quality.label,
             headers: P_HEADERS,
         };
     });
