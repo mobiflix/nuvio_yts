@@ -6,10 +6,9 @@ const P_HEADERS = {
 };
 const HEADERS = { ...P_HEADERS, "Accept": "application/json" };
 
-// Dalawang server lang
-const SERVERS = ["orion", "callisto"];
+// Callisto na lang ang gagamitin
+const SERVERS = ["callisto"];
 const SERVER_LABELS = {
-    orion: "Orion",
     callisto: "Callisto",
 };
 
@@ -31,7 +30,6 @@ function parseQuality(rawQuality) {
     return null;
 }
 
-// Binago natin ito para kunin lang ang unang matinong 1080p source per server
 function parseSingleSource(payload) {
     const stream = payload && payload.stream;
     const rawSources = stream && Array.isArray(stream.sources) ? stream.sources : [];
@@ -41,7 +39,7 @@ function parseSingleSource(payload) {
         const quality = parseQuality(source.quality || source.name);
         if (!quality) continue;
         
-        // Ibalik agad ang unang nahanap para isa lang per server
+        // Ibalik agad ang unang nahanap para isa lang
         return { 
             url: source.url, 
             quality, 
@@ -52,25 +50,19 @@ function parseSingleSource(payload) {
 }
 
 async function locateSources(queryString) {
-    // Sabay nating tatanungin si Orion at Callisto
-    const results = await Promise.all(
-        SERVERS.map(async (server) => {
-            const payload = await fetchResolverPayload(`${queryString}&prefer=${server}`);
-            const parsed = parseSingleSource(payload);
-            if (parsed) {
-                return {
-                    url: parsed.url,
-                    quality: parsed.quality,
-                    // Kung walang ibinalik na pangalan ang API, gamitin ang default (orion/callisto)
-                    serverName: parsed.serverName || server
-                };
-            }
-            return null;
-        })
-    );
-
-    // Ibabalik lahat ng servers na may nahanap (Orion at/o Callisto)
-    return results.filter(Boolean);
+    // Dahil isa na lang ang server, diretso na tayo
+    const payload = await fetchResolverPayload(`${queryString}&prefer=callisto`);
+    const parsed = parseSingleSource(payload);
+    
+    if (parsed) {
+        return [{
+            url: parsed.url,
+            quality: parsed.quality,
+            serverName: parsed.serverName || "callisto"
+        }];
+    }
+    
+    return [];
 }
 
 async function getStreams(tmdbId, mediaType, season, episode) {
@@ -88,10 +80,9 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     // I-mapa natin sila sa tamang format
     return availableSources.map((source) => {
-        // Siguraduhing tama ang capitalization (Orion / Callisto)
         const displayServer = SERVER_LABELS[source.serverName.toLowerCase()] || source.serverName;
         
-        // Format: Orion | 1080P | 🌱 100
+        // Format: Callisto | 1080P | 🌱 100
         const label = `${displayServer} | ${source.quality.label} | 🌱 100`;
         
         return {
