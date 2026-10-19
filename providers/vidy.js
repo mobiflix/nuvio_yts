@@ -2,9 +2,12 @@ const BASE_URL = "https://www.vidy.st/";
 const API_BASE = "https://api.wecollege.net";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
-// Walang per-request timeout. May safety net lang laban sa literal na hang ng fetch().
-// Kung ayaw mo talaga ng safety net, gawing null.
+// Safety net lang laban sa literal na hang ng fetch(). Hindi ito aggressive cutoff.
 const SAFETY_FETCH_TIMEOUT = 30000;
+
+// Gaano katagal hihintayin si Miami bago "lumipat" at hintayin si Boise.
+// Hindi ito cancellation — patuloy pa ring tumatakbo si Miami sa background.
+const MIAMI_GRACE_MS = 5000;
 
 function withTimeout(promise, timeoutMs) {
   if (timeoutMs == null) return promise;
@@ -193,22 +196,9 @@ async function fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode
   return payload.sources && payload.sources.length > 0 ? payload : null;
 }
 
-async function* asCompleted(promises) {
-  const pending = new Map();
-  promises.forEach((p, i) => {
-    pending.set(i, Promise.resolve(p).then(
-      (value) => ({ index: i, value }),
-      (error) => ({ index: i, error })
-    ));
-  });
-
-  while (pending.size > 0) {
-    const settled = await Promise.race(pending.values());
-    pending.delete(settled.index);
-    yield settled;
-  }
-}
-
+// ─────────────────────────────────────────────────────────────
+// Option B: Miami priority + 5s grace
+// ─────────────────────────────────────────────────────────────
 async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
   const normalizedType = mediaType === "tv" ? "tv" : "movie";
   const numericTmdbId = Number(tmdbId);
@@ -219,36 +209,99 @@ async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
   const regions = ["miami", "boise"];
   const seen = new Set();
 
-  const regionPromises = regions.map(async (region) => {
-    try {
-      const payload = await fetchPayloadFromRegion(
-        region,
-        normalizedType,
-        numericTmdbId,
-        Number(season),
-        Number(episode)
-      );
-      if (!payload) return null;
-      return { region, streams: buildStreams(payload, region) };
-    } catch (error) {
-      return null;
-    }
+  // Simulan LAHAT nang sabay — walang region na naka-hold
+  const pending = new Map();
+  regions.forEach((region, i) => {
+    pending.set(i, (async () => {
+      try {
+        const payload = await fetchPayloadFromRegion(
+          region, normalizedType, numericTmdbId, Number(season), Number(episode)
+        );
+        return payload ? { region, streams: buildStreams(payload, region) } : null;
+      } catch {
+        return null;
+      }
+    })());
   });
 
-  for await (const settled of asCompleted(regionPromises)) {
-    if (settled.error) continue;
-    const result = settled.value;
-    if (!result) continue;
+  const miamiPromise = pending.get(0);
+  const boisePromise = pending.get(1);
 
-    const fresh = result.streams.filter((stream) => !seen.has(stream.url));
-    fresh.forEach((stream) => seen.add(stream.url));
+  // ─── Step 1: Hintayin si Miami nang may 5s grace ──────────
+  let miamiSettled = false;
+  let miamiResult = null;
 
+  try {
+    const raceResult = await Promise.race([
+      miamiPromise.then((r) => ({ type: "miami", value: r })),
+      new Promise((resolve) =>
+        setTimeout(() => resolve({ type: "grace_expired" }), MIAMI_GRACE_MS)
+      )
+    ]);
+
+    if (raceResult.type === "miami") {
+      miamiSettled = true;
+      miamiResult = raceResult.value;
+    }
+    // else: grace expired — Miami hindi pa sumagot, pero patuloy pa rin siya
+  } catch {
+    miamiSettled = true;
+    miamiResult = null;
+  }
+
+  // Kung sumagot si Miami within 5s, i-yield agad
+  if (miamiSettled && miamiResult) {
+    const fresh = miamiResult.streams.filter((s) => !seen.has(s.url));
+    fresh.forEach((s) => seen.add(s.url));
     if (fresh.length > 0) {
-      yield fresh;
+      yield fresh;   // ← Miami lumabas agad
+    }
+  }
+
+  // ─── Step 2: Hintayin si Boise (at Miami kung hindi pa) ───
+  if (!miamiSettled) {
+    // Grace expired — hintayin kung sino ang unang sumagot sa dalawa
+    const firstSettled = await Promise.race([
+      miamiPromise.then((r) => ({ type: "miami", value: r })),
+      boisePromise.then((r) => ({ type: "boise", value: r }))
+    ]);
+
+    if (firstSettled.type === "miami") {
+      miamiSettled = true;
+      const freshM = (firstSettled.value?.streams || []).filter((s) => !seen.has(s.url));
+      freshM.forEach((s) => seen.add(s.url));
+      if (freshM.length > 0) yield freshM;
+
+      const boiseResult = await boisePromise;
+      if (boiseResult) {
+        const freshB = boiseResult.streams.filter((s) => !seen.has(s.url));
+        freshB.forEach((s) => seen.add(s.url));
+        if (freshB.length > 0) yield freshB;
+      }
+    } else {
+      const freshB = (firstSettled.value?.streams || []).filter((s) => !seen.has(s.url));
+      freshB.forEach((s) => seen.add(s.url));
+      if (freshB.length > 0) yield freshB;
+
+      const miamiFinal = await miamiPromise;
+      if (miamiFinal) {
+        const freshM = miamiFinal.streams.filter((s) => !seen.has(s.url));
+        freshM.forEach((s) => seen.add(s.url));
+        if (freshM.length > 0) yield freshM;
+      }
+    }
+  } else {
+    // Miami settled na (may result o null) — hintayin na lang si Boise
+    const boiseResult = await boisePromise;
+    if (boiseResult) {
+      const freshB = boiseResult.streams.filter((s) => !seen.has(s.url));
+      freshB.forEach((s) => seen.add(s.url));
+      if (freshB.length > 0) yield freshB;
     }
   }
 }
 
+// Backward-compatible na getStreams (naghihintay sa lahat, same signature)
 async function getStreams(tmdbId, mediaType, season, episode) {
   const all = [];
   for await (const batch of getStreamsProgressive(tmdbId, mediaType, season, episode)) {
