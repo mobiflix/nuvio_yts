@@ -2,11 +2,7 @@ const BASE_URL = "https://www.vidy.st/";
 const API_BASE = "https://api.wecollege.net";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
-// Safety net lang laban sa literal na hang ng fetch(). Hindi ito aggressive cutoff.
 const SAFETY_FETCH_TIMEOUT = 30000;
-
-// Gaano katagal hihintayin si Miami bago "lumipat" at hintayin si Boise.
-// Hindi ito cancellation — patuloy pa ring tumatakbo si Miami sa background.
 const MIAMI_GRACE_MS = 5000;
 
 function withTimeout(promise, timeoutMs) {
@@ -196,9 +192,6 @@ async function fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode
   return payload.sources && payload.sources.length > 0 ? payload : null;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Option B: Miami priority + 5s grace
-// ─────────────────────────────────────────────────────────────
 async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
   const normalizedType = mediaType === "tv" ? "tv" : "movie";
   const numericTmdbId = Number(tmdbId);
@@ -208,17 +201,28 @@ async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
 
   const regions = ["miami", "boise"];
   const seen = new Set();
+  const t0 = Date.now();
 
-  // Simulan LAHAT nang sabay — walang region na naka-hold
+  console.log(`[GEN ${Date.now() - t0}ms] START — regions: ${regions.join(", ")}`);
+
   const pending = new Map();
   regions.forEach((region, i) => {
     pending.set(i, (async () => {
+      const regionStart = Date.now();
       try {
         const payload = await fetchPayloadFromRegion(
           region, normalizedType, numericTmdbId, Number(season), Number(episode)
         );
-        return payload ? { region, streams: buildStreams(payload, region) } : null;
-      } catch {
+        const elapsed = Date.now() - t0;
+        if (payload) {
+          console.log(`[GEN ${elapsed}ms] FETCH OK — ${region.toUpperCase()} (${Date.now() - regionStart}ms fetch)`);
+          return { region, streams: buildStreams(payload, region) };
+        }
+        console.log(`[GEN ${elapsed}ms] FETCH EMPTY — ${region.toUpperCase()}`);
+        return null;
+      } catch (error) {
+        const elapsed = Date.now() - t0;
+        console.log(`[GEN ${elapsed}ms] FETCH FAIL — ${region.toUpperCase()}: ${error.message}`);
         return null;
       }
     })());
@@ -227,7 +231,6 @@ async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
   const miamiPromise = pending.get(0);
   const boisePromise = pending.get(1);
 
-  // ─── Step 1: Hintayin si Miami nang may 5s grace ──────────
   let miamiSettled = false;
   let miamiResult = null;
 
@@ -242,25 +245,25 @@ async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
     if (raceResult.type === "miami") {
       miamiSettled = true;
       miamiResult = raceResult.value;
+      console.log(`[GEN ${Date.now() - t0}ms] MIAMI settled within grace`);
+    } else {
+      console.log(`[GEN ${Date.now() - t0}ms] MIAMI grace expired (${MIAMI_GRACE_MS}ms) — moving on`);
     }
-    // else: grace expired — Miami hindi pa sumagot, pero patuloy pa rin siya
   } catch {
     miamiSettled = true;
     miamiResult = null;
   }
 
-  // Kung sumagot si Miami within 5s, i-yield agad
   if (miamiSettled && miamiResult) {
     const fresh = miamiResult.streams.filter((s) => !seen.has(s.url));
     fresh.forEach((s) => seen.add(s.url));
     if (fresh.length > 0) {
-      yield fresh;   // ← Miami lumabas agad
+      console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD MIAMI — ${fresh.length} streams`);
+      yield fresh;
     }
   }
 
-  // ─── Step 2: Hintayin si Boise (at Miami kung hindi pa) ───
   if (!miamiSettled) {
-    // Grace expired — hintayin kung sino ang unang sumagot sa dalawa
     const firstSettled = await Promise.race([
       miamiPromise.then((r) => ({ type: "miami", value: r })),
       boisePromise.then((r) => ({ type: "boise", value: r }))
@@ -270,38 +273,53 @@ async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
       miamiSettled = true;
       const freshM = (firstSettled.value?.streams || []).filter((s) => !seen.has(s.url));
       freshM.forEach((s) => seen.add(s.url));
-      if (freshM.length > 0) yield freshM;
+      if (freshM.length > 0) {
+        console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD MIAMI (post-grace) — ${freshM.length} streams`);
+        yield freshM;
+      }
 
       const boiseResult = await boisePromise;
       if (boiseResult) {
         const freshB = boiseResult.streams.filter((s) => !seen.has(s.url));
         freshB.forEach((s) => seen.add(s.url));
-        if (freshB.length > 0) yield freshB;
+        if (freshB.length > 0) {
+          console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD BOISE — ${freshB.length} streams`);
+          yield freshB;
+        }
       }
     } else {
       const freshB = (firstSettled.value?.streams || []).filter((s) => !seen.has(s.url));
       freshB.forEach((s) => seen.add(s.url));
-      if (freshB.length > 0) yield freshB;
+      if (freshB.length > 0) {
+        console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD BOISE (first) — ${freshB.length} streams`);
+        yield freshB;
+      }
 
       const miamiFinal = await miamiPromise;
       if (miamiFinal) {
         const freshM = miamiFinal.streams.filter((s) => !seen.has(s.url));
         freshM.forEach((s) => seen.add(s.url));
-        if (freshM.length > 0) yield freshM;
+        if (freshM.length > 0) {
+          console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD MIAMI (late) — ${freshM.length} streams`);
+          yield freshM;
+        }
       }
     }
   } else {
-    // Miami settled na (may result o null) — hintayin na lang si Boise
     const boiseResult = await boisePromise;
     if (boiseResult) {
       const freshB = boiseResult.streams.filter((s) => !seen.has(s.url));
       freshB.forEach((s) => seen.add(s.url));
-      if (freshB.length > 0) yield freshB;
+      if (freshB.length > 0) {
+        console.log(`[GEN ${Date.now() - t0}ms] ★ YIELD BOISE — ${freshB.length} streams`);
+        yield freshB;
+      }
     }
   }
+
+  console.log(`[GEN ${Date.now() - t0}ms] DONE`);
 }
 
-// Backward-compatible na getStreams (naghihintay sa lahat, same signature)
 async function getStreams(tmdbId, mediaType, season, episode) {
   const all = [];
   for await (const batch of getStreamsProgressive(tmdbId, mediaType, season, episode)) {
