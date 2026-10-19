@@ -2,20 +2,12 @@ const BASE_URL = "https://www.vidy.st/";
 const API_BASE = "https://api.wecollege.net";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 
-const SEED_TIMEOUT = 4000;
-const SOURCES_TIMEOUT = 6000;
-
-async function fetchText(url, timeoutMs) {
-  const response = await withTimeout(fetch(url, { headers: { "User-Agent": USER_AGENT, "Accept": "*/*" } }), timeoutMs);
-  if (response.status !== 200) throw new Error("http_" + response.status);
-  return withTimeout(response.text(), timeoutMs);
-}
-
-function isHttpUrl(value) {
-  return typeof value === "string" && /^https?:/.test(value);
-}
+// Walang per-request timeout. May safety net lang laban sa literal na hang ng fetch().
+// Kung ayaw mo talaga ng safety net, gawing null.
+const SAFETY_FETCH_TIMEOUT = 30000;
 
 function withTimeout(promise, timeoutMs) {
+  if (timeoutMs == null) return promise;
   return new Promise((resolve, reject) => {
     const timerId = setTimeout(() => reject(new Error("timeout")), timeoutMs);
     promise.then(
@@ -23,6 +15,19 @@ function withTimeout(promise, timeoutMs) {
       (error) => { clearTimeout(timerId); reject(error); }
     );
   });
+}
+
+async function fetchText(url, timeoutMs = SAFETY_FETCH_TIMEOUT) {
+  const response = await withTimeout(
+    fetch(url, { headers: { "User-Agent": USER_AGENT, "Accept": "*/*" } }),
+    timeoutMs
+  );
+  if (response.status !== 200) throw new Error("http_" + response.status);
+  return withTimeout(response.text(), timeoutMs);
+}
+
+function isHttpUrl(value) {
+  return typeof value === "string" && /^https?:/.test(value);
 }
 
 function decodeBase64Url(encoded) {
@@ -142,23 +147,18 @@ function collectWantedSources(rawSources) {
   return wantedSources;
 }
 
-// DITO ANG MALAKING PAGBABAGO: Gumamit tayo ng invisible characters (Zero-Width Space at Non-Joiner)
-// Para pwersahang mauuna si MIAMI kahit anong sorting ang gawin ng App.
 function buildStreams(payload, region) {
   const subtitles = normalizeSubtitles(payload.subtitles);
   const sources = collectWantedSources(payload.sources);
 
-  // Invisible Sort Tags
-  const sortTag = region === "miami" ? "\u200B" : "\u200C"; // \u200B (Miami) mauuna, \u200C (Boise) pangalawa
+  const sortTag = region === "miami" ? "\u200B" : "\u200C";
 
   return sources.map(({ url, height }, index) => {
     const providerName = region.toUpperCase();
     const fakeSeeders = 100 + ((index * 13) % 800);
     const fakeSize = (1.2 + (index * 0.4)).toFixed(2);
-    
-    // Nilagyan natin ng sortTag sa unahan ng name
+
     const streamName = `${sortTag}${providerName} | ${height}P | 🌱 ${fakeSeeders}`;
-    
     const streamTitle = `🎬 Spider-Man: Brand New Day ${height}p\n🔥 ${height}p | 💾 ${fakeSize} GB | 🔗 ${providerName}`;
 
     return {
@@ -173,7 +173,7 @@ function buildStreams(payload, region) {
 }
 
 async function fetchSeed(tmdbId) {
-  const body = await fetchText(API_BASE + "/seed?mediaId=" + tmdbId, SEED_TIMEOUT);
+  const body = await fetchText(API_BASE + "/seed?mediaId=" + tmdbId);
   const { seed } = JSON.parse(body);
   if (!seed) throw new Error("empty_seed");
   return seed;
@@ -188,50 +188,73 @@ function buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode) {
 async function fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode) {
   const seed = await fetchSeed(tmdbId);
   const url = buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode);
-  const encryptedBody = await fetchText(url, SOURCES_TIMEOUT);
+  const encryptedBody = await fetchText(url);
   const payload = JSON.parse(decryptPayload(encryptedBody, seed, tmdbId));
   return payload.sources && payload.sources.length > 0 ? payload : null;
 }
 
-async function getStreams(tmdbId, mediaType, season, episode) {
-  try {
-    const normalizedType = mediaType === "tv" ? "tv" : "movie";
-    const numericTmdbId = Number(tmdbId);
-    if (!numericTmdbId) return [];
-    if (normalizedType === "tv" && (season == null || episode == null)) return [];
+async function* asCompleted(promises) {
+  const pending = new Map();
+  promises.forEach((p, i) => {
+    pending.set(i, Promise.resolve(p).then(
+      (value) => ({ index: i, value }),
+      (error) => ({ index: i, error })
+    ));
+  });
 
-    const regions = ["miami", "boise"]; 
-    const payloadMap = {};
-
-    const fetchPromises = regions.map(async (region) => {
-      try {
-        const payload = await fetchPayloadFromRegion(region, normalizedType, numericTmdbId, Number(season), Number(episode));
-        payloadMap[region] = payload;
-      } catch (error) {
-        payloadMap[region] = null;
-      }
-    });
-
-    await Promise.allSettled(fetchPromises);
-
-    const allStreams = [];
-    const seen = new Set();
-
-    for (const region of regions) {
-      const payload = payloadMap[region];
-      if (payload) {
-        for (const stream of buildStreams(payload, region)) {
-          if (seen.has(stream.url)) continue;
-          seen.add(stream.url);
-          allStreams.push(stream);
-        }
-      }
-    }
-
-    return allStreams;
-  } catch (error) {
-    return [];
+  while (pending.size > 0) {
+    const settled = await Promise.race(pending.values());
+    pending.delete(settled.index);
+    yield settled;
   }
 }
 
-module.exports = { getStreams };
+async function* getStreamsProgressive(tmdbId, mediaType, season, episode) {
+  const normalizedType = mediaType === "tv" ? "tv" : "movie";
+  const numericTmdbId = Number(tmdbId);
+
+  if (!numericTmdbId) return;
+  if (normalizedType === "tv" && (season == null || episode == null)) return;
+
+  const regions = ["miami", "boise"];
+  const seen = new Set();
+
+  const regionPromises = regions.map(async (region) => {
+    try {
+      const payload = await fetchPayloadFromRegion(
+        region,
+        normalizedType,
+        numericTmdbId,
+        Number(season),
+        Number(episode)
+      );
+      if (!payload) return null;
+      return { region, streams: buildStreams(payload, region) };
+    } catch (error) {
+      return null;
+    }
+  });
+
+  for await (const settled of asCompleted(regionPromises)) {
+    if (settled.error) continue;
+    const result = settled.value;
+    if (!result) continue;
+
+    const fresh = result.streams.filter((stream) => !seen.has(stream.url));
+    fresh.forEach((stream) => seen.add(stream.url));
+
+    if (fresh.length > 0) {
+      yield fresh;
+    }
+  }
+}
+
+async function getStreams(tmdbId, mediaType, season, episode) {
+  const all = [];
+  for await (const batch of getStreamsProgressive(tmdbId, mediaType, season, episode)) {
+    all.push(...batch);
+  }
+  return all;
+}
+
+module.exports = { getStreams, getStreamsProgressive };
