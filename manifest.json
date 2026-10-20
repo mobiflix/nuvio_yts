@@ -33,6 +33,21 @@
       "supportsExternalPlayer": true 
     },
     {
+      "id": "Vaplayer",
+      "name": "Vaplayer",
+      "description": "1080p Resolution",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/vaplayer.js",
+      "enabled": true,
+      "hasSettings": true,
+      "logo": "https://em-content.zobj.net/source/apple/391/eagle_1f985.png",
+      "contentLanguage": ["en", "hi"],
+      "formats": ["mkv", "mp4"],
+      "supportsExternalPlayer": true 
+    },
+    {
       "id": "YTS",
       "name": "YTS",
       "description": "1080p Resolution",
