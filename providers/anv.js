@@ -217,6 +217,7 @@ async function buildStreams(episode, cookie, pageUrl) {
     const streams = [];
 
     for (const variant of episode.variants || []) {
+        // ✅ Kunin ang language name (Japanese o English)
         const language = { sub: "Japanese", dub: "English" }[variant.id];
         if (!language) continue;
 
@@ -239,8 +240,8 @@ async function buildStreams(episode, cookie, pageUrl) {
                 return [{ url, language: track.language || name, name, headers }];
             });
 
-            // ✅ FORMAT: ORANGE | 1080P | 🌱 100
-            const displayName = `ORANGE | 1080P | 🌱 100`;
+            // ✅ FORMAT: ORANGE | 1080P | 🌱 100 | ENGLISH / JAPANESE
+            const displayName = `ORANGE | 1080P | 🌱 100 | ${language.toUpperCase()}`;
 
             streams.push({
                 name: displayName,
