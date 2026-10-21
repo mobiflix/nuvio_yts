@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "scrapers": [
     {
-      "id": "Server 1",
-      "name": "Server 1",
+      "id": "VIDY",
+      "name": "VIDY",
       "description": "1080p Resolution",
       "version": "1.0.0",
       "author": "Nuvio Team",
@@ -18,8 +18,8 @@
       "supportsExternalPlayer": true 
     },
     {
-      "id": "Server 2",
-      "name": "Server 2",
+      "id": "CINEJOY",
+      "name": "CINEJOY",
       "description": "1080p Resolution",
       "version": "1.0.0",
       "author": "Nuvio Team",
@@ -33,8 +33,8 @@
       "supportsExternalPlayer": true 
     },
     {
-      "id": "Server 3",
-      "name": "Server 3",
+      "id": "NETMIRROR",
+      "name": "NETMIRROR",
       "description": "1080p Resolution",
       "version": "1.0.0",
       "author": "Nuvio Team",
@@ -48,28 +48,13 @@
       "supportsExternalPlayer": true 
     },
     {
-      "id": "Server 4",
-      "name": "Server 4",
+      "id": "VIDLINK",
+      "name": "VIDLINK",
       "description": "1080p Resolution",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/vidlink.js",
-      "enabled": true,
-      "hasSettings": true,
-      "logo": "https://em-content.zobj.net/source/apple/391/eagle_1f985.png",
-      "contentLanguage": ["en", "hi"],
-      "formats": ["mkv", "mp4"],
-      "supportsExternalPlayer": true 
-    },
-    {
-      "id": "Crunchyroll",
-      "name": "Crunchyroll",
-      "description": "1080p Resolution",
-      "version": "1.0.0",
-      "author": "Nuvio Team",
-      "supportedTypes": ["movie", "tv"],
-      "filename": "providers/anv.js",
       "enabled": true,
       "hasSettings": true,
       "logo": "https://em-content.zobj.net/source/apple/391/eagle_1f985.png",
