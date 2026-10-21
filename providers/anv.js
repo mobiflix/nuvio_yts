@@ -221,12 +221,11 @@ async function buildStreams(episode, cookie, pageUrl) {
         if (!language) continue;
 
         for (const source of variant.sources || []) {
-            // ✅ ITO ANG FILTER: Orange server lang ang papasukin
+            // ✅ Orange server filter
             if (!isOrangeServer(source)) continue;
 
             const streamUrl = toAbsoluteUrl(source.url);
-            const label = source.label?.trim();
-            if (!streamUrl || !label) continue;
+            if (!streamUrl) continue;
 
             const uses = urlUses.get(streamUrl) || 0;
             urlUses.set(streamUrl, uses + 1);
@@ -240,13 +239,20 @@ async function buildStreams(episode, cookie, pageUrl) {
                 return [{ url, language: track.language || name, name, headers }];
             });
 
-            const name = `Anv \u2022 ${language} \u2022 ${label}`;
+            // ✅ FORMAT: ORANGE | 1080P | 🌱 100
+            const displayName = `ORANGE | 1080P | 🌱 100`;
+
             streams.push({
-                name,
-                title: name,
+                name: displayName,
+                title: displayName,
                 url: uses === 0 ? streamUrl : `${streamUrl}${streamUrl.includes("?") ? "&" : "?"}f=${uses}`,
                 type: "hls",
                 headers,
+                
+                // ✅ Fake Seeds / Metadata
+                seeders: 100, 
+                peers: 100,
+                
                 ...(subtitles.length ? { subtitles } : {})
             });
         }
