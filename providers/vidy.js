@@ -121,26 +121,24 @@ function collectWantedSources(rawSources) {
     if (!src || !isHttpUrl(src.url) || seen.has(src.url)) continue;
     const h = parseHeight(src.quality);
     if (h !== 1080) continue; // 1080p LANG
+    
     seen.add(src.url);
-    out.push({ url: src.url, height: h, region: src.region || "SERVER" });
+    
+    // 150 seeds kay Miami, 100 kay Boise para laging nasa taas si Miami
+    const fakeSeeds = src.region === "MIAMI" ? 150 : 100;
+    
+    out.push({ url: src.url, height: h, region: src.region || "SERVER", fakeSeeds });
   }
   
-  // Sort logic: Pipilitin na laging MIAMI ang nasa taas (index 0)
-  return out.sort((a, b) => {
-    if (a.region === "MIAMI" && b.region !== "MIAMI") return -1;
-    if (a.region !== "MIAMI" && b.region === "MIAMI") return 1;
-    return 0;
-  });
+  // I-sort base sa pinakamataas na seeds
+  return out.sort((a, b) => b.fakeSeeds - a.fakeSeeds);
 }
 
 function buildStreams(payload) {
   const subtitles = normalizeSubtitles(payload.subtitles);
-  return collectWantedSources(payload.sources).map(({ url, height, region }) => {
+  return collectWantedSources(payload.sources).map(({ url, height, region, fakeSeeds }) => {
     
-    // Pekeng seeds para magaya ang UI ng ibang providers (gaya ng image)
-    const fakeSeeds = 100; 
-    
-    // Eksaktong format: MIAMI | 1080P | 🌱 100
+    // Eksaktong format: MIAMI | 1080P | 🌱 150
     const name = `${region} | ${height}P | 🌱 ${fakeSeeds}`;
     
     return {
