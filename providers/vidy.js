@@ -1,61 +1,34 @@
 const BASE_URL = "https://www.vidy.st/";
 const API_BASE = "https://api.wecollege.net";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+const HEADERS = {
+  "User-Agent": USER_AGENT,
+  "Accept": "*/*",
+  "Referer": BASE_URL,
+  "Origin": "https://www.vidy.st"
+};
 
-// Single deadline per region (seed + sources kasama)
-const REGION_TIMEOUT = 10000;   // 10s cap per region
-const GLOBAL_TIMEOUT = 12000;   // 12s hard cap sa buong getStreams()
-
-async function fetchText(url, timeoutMs, externalSignal) {
-  const controller = new AbortController();
-  const timerId = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
-
-  // Kung may external signal (e.g. region deadline), pagsamahin
-  const onExternalAbort = () => controller.abort(externalSignal.reason);
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort(externalSignal.reason);
-    else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
-  }
-
-  try {
-    const response = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT, "Accept": "*/*" },
-      signal: controller.signal
-    });
-    if (response.status !== 200) throw new Error("http_" + response.status);
-    return await response.text();
-  } finally {
-    clearTimeout(timerId);
-    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
-  }
+async function fetchText(url) {
+  const headers = url.includes("api.wecollege.net") ? HEADERS : { "User-Agent": USER_AGENT, "Accept": "*/*" };
+  const response = await fetch(url, { headers });
+  if (response.status !== 200) throw new Error(`http_${response.status}`);
+  return response.text();
 }
 
 function isHttpUrl(value) {
   return typeof value === "string" && /^https?:/.test(value);
 }
 
-function withTimeout(promise, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const timerId = setTimeout(() => reject(new Error("timeout")), timeoutMs);
-    promise.then(
-      (value) => { clearTimeout(timerId); resolve(value); },
-      (error) => { clearTimeout(timerId); reject(error); }
-    );
-  });
-}
-
 function decodeBase64Url(encoded) {
   const lookup = new Int16Array(128).fill(-1);
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  for (let index = 0; index < alphabet.length; index++) { lookup[alphabet.charCodeAt(index)] = index; }
+  for (let i = 0; i < alphabet.length; i++) lookup[alphabet.charCodeAt(i)] = i;
   lookup["-".charCodeAt(0)] = 62;
   lookup["_".charCodeAt(0)] = 63;
-
   const bytes = new Uint8Array(((encoded.length * 6) >> 3) + 1);
   let byteCount = 0, bitCount = 0, accumulator = 0;
-
-  for (let index = 0; index < encoded.length; index++) {
-    const charCode = encoded.charCodeAt(index);
+  for (let i = 0; i < encoded.length; i++) {
+    const charCode = encoded.charCodeAt(i);
     const sextet = charCode < 128 ? lookup[charCode] : -1;
     if (sextet < 0) continue;
     accumulator = ((accumulator << 6) | sextet) & 0xFFFFFF;
@@ -68,71 +41,64 @@ function decodeBase64Url(encoded) {
   return bytes.subarray(0, byteCount);
 }
 
-function multiplyUint32(a, b) { return Math.imul(a, b) >>> 0; }
-function rotateLeft32(value, shift) {
-  const amount = shift & 31;
-  if (amount === 0) return value >>> 0;
-  return ((value << amount) | (value >>> (32 - amount))) >>> 0;
-}
+const imul = (a, b) => Math.imul(a, b) >>> 0;
+
 function avalanche32(input) {
-  let value = input >>> 0;
-  value = (value ^ (value >>> 16)) >>> 0;
-  value = multiplyUint32(value, 0x85EBCA6B);
-  value = (value ^ (value >>> 13)) >>> 0;
-  value = multiplyUint32(value, 0xC2B2AE35);
-  return (value ^ (value >>> 16)) >>> 0;
+  let v = input >>> 0;
+  v = (v ^ (v >>> 16)) >>> 0; v = imul(v, 0x85EBCA6B);
+  v = (v ^ (v >>> 13)) >>> 0; v = imul(v, 0xC2B2AE35);
+  return (v ^ (v >>> 16)) >>> 0;
 }
+
+function rotl32(value, shift) {
+  const s = shift & 31;
+  return s === 0 ? value >>> 0 : ((value << s) | (value >>> (32 - s))) >>> 0;
+}
+
 function hashFnv1a(text) {
   const bytes = new TextEncoder().encode(text);
   let hash = 0x811C9DC5;
-  for (let index = 0; index < bytes.length; index++) {
-    hash = multiplyUint32((hash ^ bytes[index]) >>> 0, 0x01000193);
-  }
+  for (let i = 0; i < bytes.length; i++) hash = imul((hash ^ bytes[i]) >>> 0, 0x01000193);
   return avalanche32(hash);
 }
 
 function generateKeystream(seed, tmdbId, length) {
   const cells = new Uint32Array(61);
-  const isCellInitialized = new Uint8Array(61);
-  let seedState = avalanche32((hashFnv1a(seed) ^ avalanche32((tmdbId >>> 0) ^ 0x9E3779B9)) >>> 0);
-  for (let round = 0; round < 8; round++) {
-    const cellIndex = seedState % 61;
-    const rotated = rotateLeft32((seedState + 0x9E3779B9) >>> 0, 7 + (7 & round));
-    cells[cellIndex] = (rotated ^ avalanche32(rotated)) >>> 0;
-    isCellInitialized[cellIndex] = 1;
-    seedState = avalanche32((rotated + cellIndex) >>> 0);
+  const init = new Uint8Array(61);
+  let s = avalanche32((hashFnv1a(seed) ^ avalanche32((tmdbId >>> 0) ^ 0x9E3779B9)) >>> 0);
+  for (let r = 0; r < 8; r++) {
+    const t = s % 61;
+    const sr = rotl32((s + 0x9E3779B9) >>> 0, 7 + (7 & r));
+    cells[t] = (sr ^ avalanche32(sr)) >>> 0;
+    init[t] = 1;
+    s = avalanche32((sr + t) >>> 0);
   }
-  let word = avalanche32(0xA5A5A5A5 ^ seedState);
-  const keystream = new Uint8Array(length);
+  let word = avalanche32(0xA5A5A5A5 ^ s);
+  const ks = new Uint8Array(length);
   let counter = 0, offset = 0;
   while (offset < length) {
-    const cellIndex = word % 61;
-    const inner = (cells[cellIndex] ^ multiplyUint32(0x9E3779B9, counter + 1)) >>> 0;
-    const initializedMask = isCellInitialized[cellIndex] ? -1 : 0;
-    const combined = ((word ^ inner) | (word & inner & initializedMask)) >>> 0;
-    const scrambled = (rotateLeft32((combined + word) >>> 0, 31 & cellIndex) ^ rotateLeft32(word, 31 & ((cellIndex * 7) & 31))) >>> 0;
-    word = avalanche32((scrambled + 0x9E3779B9) >>> 0);
-    cells[cellIndex] = word;
-    isCellInitialized[cellIndex] = 1;
-    keystream[offset++] = word & 0xFF;
-    if (offset < length) keystream[offset++] = (word >>> 8) & 0xFF;
-    if (offset < length) keystream[offset++] = (word >>> 16) & 0xFF;
-    if (offset < length) keystream[offset++] = (word >>> 24) & 0xFF;
+    const d = word % 61;
+    const inner = (cells[d] ^ imul(0x9E3779B9, counter + 1)) >>> 0;
+    const mask = init[d] ? -1 : 0;
+    const combined = ((word ^ inner) | (word & inner & mask)) >>> 0;
+    const x = (rotl32((combined + word) >>> 0, 31 & d) ^ rotl32(word, 31 & ((d * 7) & 31))) >>> 0;
+    word = avalanche32((x + 0x9E3779B9) >>> 0);
+    cells[d] = word; init[d] = 1;
+    ks[offset++] = word & 0xFF;
+    if (offset < length) ks[offset++] = (word >>> 8) & 0xFF;
+    if (offset < length) ks[offset++] = (word >>> 16) & 0xFF;
+    if (offset < length) ks[offset++] = (word >>> 24) & 0xFF;
     counter++;
   }
-  return keystream;
-}
-
-function hasPayloadMagic(bytes) {
-  return [0x6D, 0x76, 0x6D, 0x31].every((expected, index) => bytes[index] === expected);
+  return ks;
 }
 
 function decryptPayload(encodedCiphertext, seed, tmdbId) {
   const bytes = decodeBase64Url(encodedCiphertext);
   if (bytes.length < 4) throw new Error("payload too short");
-  const keystream = generateKeystream(seed, tmdbId, bytes.length);
-  for (let index = 0; index < bytes.length; index++) { bytes[index] ^= keystream[index]; }
-  if (!hasPayloadMagic(bytes)) throw new Error("bad seed or tampered payload");
+  const ks = generateKeystream(seed, tmdbId, bytes.length);
+  for (let i = 0; i < bytes.length; i++) bytes[i] ^= ks[i];
+  if (![0x6D, 0x76, 0x6D, 0x31].every((b, i) => bytes[i] === b)) throw new Error("bad seed or tampered payload");
   return new TextDecoder("utf-8").decode(bytes.subarray(4));
 }
 
@@ -142,123 +108,108 @@ function parseHeight(rawQuality) {
 }
 
 function normalizeSubtitles(rawSubtitles) {
-  return (rawSubtitles || []).slice(0, 40).map((subtitle) => ({
-    language: String(subtitle.label || subtitle.lang || subtitle.language || "Subtitle"),
-    url: subtitle.url || subtitle.file
-  })).filter((subtitle) => isHttpUrl(subtitle.url));
+  return (rawSubtitles || [])
+    .slice(0, 40)
+    .map((s) => ({ language: `${s.label || s.lang || s.language || "Subtitle"}`, url: s.url || s.file }))
+    .filter((s) => isHttpUrl(s.url));
 }
 
 function collectWantedSources(rawSources) {
-  const seenUrls = new Set();
-  const wantedSources = [];
-  for (const source of rawSources || []) {
-    if (!source || !isHttpUrl(source.url) || seenUrls.has(source.url)) continue;
-    const height = parseHeight(source.quality);
-    if (height !== 1080) continue;
-    seenUrls.add(source.url);
-    wantedSources.push({ url: source.url, height });
+  const seen = new Set();
+  const out = [];
+  for (const src of rawSources || []) {
+    if (!src || !isHttpUrl(src.url) || seen.has(src.url)) continue;
+    const h = parseHeight(src.quality);
+    if (h !== 1080) continue; // 1080p LANG
+    seen.add(src.url);
+    out.push({ url: src.url, height: h, region: src.region || "SERVER" });
   }
-  return wantedSources;
+  return out;
 }
 
-function buildStreams(payload, region) {
+function buildStreams(payload) {
   const subtitles = normalizeSubtitles(payload.subtitles);
-  const sources = collectWantedSources(payload.sources);
-
-  const sortTag = region === "miami" ? "\u200B" : "\u200C";
-
-  return sources.map(({ url, height }, index) => {
-    const providerName = region.toUpperCase();
-    const fakeSeeders = 100 + ((index * 13) % 800);
-    const fakeSize = (1.2 + (index * 0.4)).toFixed(2);
-
-    const streamName = `${sortTag}${providerName} | ${height}P | 🌱 ${fakeSeeders}`;
-    const streamTitle = `🎬 Spider-Man: Brand New Day ${height}p\n🔥 ${height}p | 💾 ${fakeSize} GB | 🔗 ${providerName}`;
-
+  return collectWantedSources(payload.sources).map(({ url, height, region }) => {
+    
+    // Gumawa ng pekeng "seeds" para magaya ang UI ng ibang providers
+    const fakeSeeds = 100; 
+    
+    // Eksaktong format: MIAMI | 1080P | 🌱 100
+    const name = `${region} | ${height}P | 🌱 ${fakeSeeds}`;
+    
     return {
-      name: streamName,
-      title: streamTitle,
+      name,
+      title: name,
       url,
-      quality: height + "p",
-      headers: { "User-Agent": USER_AGENT, "Referer": BASE_URL },
+      quality: `${height}p`,
+      headers: {
+        "User-Agent": USER_AGENT,
+        "Referer": BASE_URL
+      },
       subtitles
     };
   });
 }
 
-async function fetchSeed(tmdbId, signal) {
-  const body = await fetchText(API_BASE + "/seed?mediaId=" + tmdbId, REGION_TIMEOUT, signal);
+async function fetchSeed(tmdbId) {
+  const body = await fetchText(`${API_BASE}/seed?mediaId=${tmdbId}`);
   const { seed } = JSON.parse(body);
   if (!seed) throw new Error("empty_seed");
   return seed;
 }
 
 function buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode) {
-  let query = "mediaType=" + mediaType + "&tmdbId=" + tmdbId + "&enc=2&seed=" + encodeURIComponent(seed);
-  if (mediaType === "tv") query += "&seasonId=" + season + "&episodeId=" + episode;
-  return API_BASE + "/" + region + "/sources?" + query;
+  let q = `mediaType=${mediaType}&tmdbId=${tmdbId}&enc=2&seed=${encodeURIComponent(seed)}&title=`;
+  if (mediaType === "tv") q += `&seasonId=${season}&episodeId=${episode}`;
+  return `${API_BASE}/${region}/sources?${q}`;
 }
 
-// Isang deadline per region: seed + sources kasama sa REGION_TIMEOUT
 async function fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode) {
-  const controller = new AbortController();
-  const timerId = setTimeout(() => controller.abort(new Error("region_timeout")), REGION_TIMEOUT);
-
-  try {
-    const seed = await fetchSeed(tmdbId, controller.signal);
-    const url = buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode);
-    const encryptedBody = await fetchText(url, REGION_TIMEOUT, controller.signal);
-    const payload = JSON.parse(decryptPayload(encryptedBody, seed, tmdbId));
-    return payload.sources && payload.sources.length > 0 ? payload : null;
-  } finally {
-    clearTimeout(timerId);
-  }
+  const seed = await fetchSeed(tmdbId);
+  const url = buildSourcesUrl(region, mediaType, tmdbId, seed, season, episode);
+  const encryptedBody = await fetchText(url);
+  const payload = JSON.parse(decryptPayload(encryptedBody, seed, tmdbId));
+  return payload.sources && payload.sources.length > 0 ? payload : null;
 }
 
-async function getStreamsInternal(tmdbId, mediaType, season, episode) {
-  const normalizedType = mediaType === "tv" ? "tv" : "movie";
-  const numericTmdbId = Number(tmdbId);
-  if (!numericTmdbId) return [];
-  if (normalizedType === "tv" && (season == null || episode == null)) return [];
-
-  const regions = ["miami", "boise"];
-  const payloadMap = {};
-
-  const fetchPromises = regions.map(async (region) => {
-    try {
-      const payload = await fetchPayloadFromRegion(region, normalizedType, numericTmdbId, Number(season), Number(episode));
-      payloadMap[region] = payload;
-    } catch (error) {
-      payloadMap[region] = null;
-    }
-  });
-
-  await Promise.allSettled(fetchPromises);
-
-  const allStreams = [];
+async function fetchPayload(mediaType, tmdbId, season, episode) {
+  const merged = { sources: [], subtitles: [] };
   const seen = new Set();
-
-  for (const region of regions) {
-    const payload = payloadMap[region];
-    if (payload) {
-      for (const stream of buildStreams(payload, region)) {
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
-        allStreams.push(stream);
+  
+  // Miami muna, tapos Boise
+  for (const region of ["miami", "boise"]) {
+    try {
+      const payload = await fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode);
+      if (!payload) continue;
+      
+      for (const src of payload.sources || []) {
+        if (!src || !isHttpUrl(src.url) || seen.has(src.url)) continue;
+        seen.add(src.url);
+        // Isinasama natin ang uppercase na region name para magamit sa name format
+        merged.sources.push({ ...src, region: region.toUpperCase() });
       }
-    }
+      
+      for (const sub of payload.subtitles || []) {
+        if (!sub) continue;
+        const key = `${sub.url || sub.file}|${sub.label || sub.lang || ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.subtitles.push(sub);
+      }
+    } catch (_) { }
   }
-
-  return allStreams;
+  return merged.sources.length > 0 ? merged : null;
 }
 
 async function getStreams(tmdbId, mediaType, season, episode) {
   try {
-    return await withTimeout(
-      getStreamsInternal(tmdbId, mediaType, season, episode),
-      GLOBAL_TIMEOUT
-    );
-  } catch (error) {
+    const type = mediaType === "tv" ? "tv" : "movie";
+    const id = Number(tmdbId);
+    if (!id) return [];
+    if (type === "tv" && (season == null || episode == null)) return [];
+    const payload = await fetchPayload(type, id, Number(season), Number(episode));
+    return payload ? buildStreams(payload) : [];
+  } catch (_) {
     return [];
   }
 }
