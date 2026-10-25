@@ -121,24 +121,20 @@ function collectWantedSources(rawSources) {
     if (!src || !isHttpUrl(src.url) || seen.has(src.url)) continue;
     const h = parseHeight(src.quality);
     if (h !== 1080) continue; // 1080p LANG
-    
     seen.add(src.url);
-    
-    // 150 seeds kay Miami, 100 kay Boise para laging nasa taas si Miami
-    const fakeSeeds = src.region === "MIAMI" ? 150 : 100;
-    
-    out.push({ url: src.url, height: h, region: src.region || "SERVER", fakeSeeds });
+    out.push({ url: src.url, height: h, region: src.region || "MIAMI" });
   }
-  
-  // I-sort base sa pinakamataas na seeds
-  return out.sort((a, b) => b.fakeSeeds - a.fakeSeeds);
+  return out;
 }
 
 function buildStreams(payload) {
   const subtitles = normalizeSubtitles(payload.subtitles);
-  return collectWantedSources(payload.sources).map(({ url, height, region, fakeSeeds }) => {
+  return collectWantedSources(payload.sources).map(({ url, height, region }) => {
     
-    // Eksaktong format: MIAMI | 1080P | 🌱 150
+    // Static seeds para magmukhang legit
+    const fakeSeeds = 100; 
+    
+    // Eksaktong format: MIAMI | 1080P | 🌱 100
     const name = `${region} | ${height}P | 🌱 ${fakeSeeds}`;
     
     return {
@@ -177,32 +173,17 @@ async function fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode
 }
 
 async function fetchPayload(mediaType, tmdbId, season, episode) {
-  const merged = { sources: [], subtitles: [] };
-  const seen = new Set();
+  // Miami na lang ang gagamitin natin
+  try {
+    const payload = await fetchPayloadFromRegion("miami", mediaType, tmdbId, season, episode);
+    if (payload) {
+      // Lagyan natin ng region tag na "MIAMI"
+      payload.sources = payload.sources.map(src => ({ ...src, region: "MIAMI" }));
+      return payload;
+    }
+  } catch (_) { }
   
-  // Miami muna, tapos Boise
-  for (const region of ["miami", "boise"]) {
-    try {
-      const payload = await fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode);
-      if (!payload) continue;
-      
-      for (const src of payload.sources || []) {
-        if (!src || !isHttpUrl(src.url) || seen.has(src.url)) continue;
-        seen.add(src.url);
-        // Isinasama natin ang uppercase na region name para magamit sa name format
-        merged.sources.push({ ...src, region: region.toUpperCase() });
-      }
-      
-      for (const sub of payload.subtitles || []) {
-        if (!sub) continue;
-        const key = `${sub.url || sub.file}|${sub.label || sub.lang || ""}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        merged.subtitles.push(sub);
-      }
-    } catch (_) { }
-  }
-  return merged.sources.length > 0 ? merged : null;
+  return null;
 }
 
 async function getStreams(tmdbId, mediaType, season, episode) {
