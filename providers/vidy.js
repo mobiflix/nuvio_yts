@@ -124,14 +124,20 @@ function collectWantedSources(rawSources) {
     seen.add(src.url);
     out.push({ url: src.url, height: h, region: src.region || "SERVER" });
   }
-  return out;
+  
+  // Sort logic: Pipilitin na laging MIAMI ang nasa taas (index 0)
+  return out.sort((a, b) => {
+    if (a.region === "MIAMI" && b.region !== "MIAMI") return -1;
+    if (a.region !== "MIAMI" && b.region === "MIAMI") return 1;
+    return 0;
+  });
 }
 
 function buildStreams(payload) {
   const subtitles = normalizeSubtitles(payload.subtitles);
   return collectWantedSources(payload.sources).map(({ url, height, region }) => {
     
-    // Gumawa ng pekeng "seeds" para magaya ang UI ng ibang providers
+    // Pekeng seeds para magaya ang UI ng ibang providers (gaya ng image)
     const fakeSeeds = 100; 
     
     // Eksaktong format: MIAMI | 1080P | 🌱 100
