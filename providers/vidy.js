@@ -122,7 +122,7 @@ function collectWantedSources(rawSources) {
     const h = parseHeight(src.quality);
     if (h !== 1080) continue; // 1080p LANG
     seen.add(src.url);
-    out.push({ url: src.url, height: h, region: src.region || "MIAMI" });
+    out.push({ url: src.url, height: h, region: src.region || "BOISE" });
   }
   return out;
 }
@@ -130,13 +130,13 @@ function collectWantedSources(rawSources) {
 function buildStreams(payload) {
   const subtitles = normalizeSubtitles(payload.subtitles);
   return collectWantedSources(payload.sources).map(({ url, height, region }) => {
-    
+
     // Static seeds para magmukhang legit
-    const fakeSeeds = 100; 
-    
-    // Eksaktong format: MIAMI | 1080P | 🌱 100
+    const fakeSeeds = 100;
+
+    // Eksaktong format: BOISE | 1080P | 🌱 100
     const name = `${region} | ${height}P | 🌱 ${fakeSeeds}`;
-    
+
     return {
       name,
       title: name,
@@ -173,16 +173,16 @@ async function fetchPayloadFromRegion(region, mediaType, tmdbId, season, episode
 }
 
 async function fetchPayload(mediaType, tmdbId, season, episode) {
-  // Miami na lang ang gagamitin natin
+  // BOISE na lang ang gagamitin natin
   try {
-    const payload = await fetchPayloadFromRegion("miami", mediaType, tmdbId, season, episode);
+    const payload = await fetchPayloadFromRegion("boise", mediaType, tmdbId, season, episode);
     if (payload) {
-      // Lagyan natin ng region tag na "MIAMI"
-      payload.sources = payload.sources.map(src => ({ ...src, region: "MIAMI" }));
+      // Lagyan natin ng region tag na "BOISE"
+      payload.sources = payload.sources.map(src => ({ ...src, region: "BOISE" }));
       return payload;
     }
   } catch (_) { }
-  
+
   return null;
 }
 
